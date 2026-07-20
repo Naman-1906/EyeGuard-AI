@@ -6,7 +6,7 @@ import os
 import threading
 import urllib.request
 
-# Try to import pygame for alarm sound
+# Optional audio support for the alarm.
 try:
     import pygame
     PYGAME_AVAILABLE = True
@@ -14,14 +14,13 @@ except ImportError:
     PYGAME_AVAILABLE = False
     print("⚠️  pygame not found. Trying alternative sound methods...")
 
-# Try winsound for Windows users
 try:
     import winsound
     WINSOUND_AVAILABLE = True
 except ImportError:
     WINSOUND_AVAILABLE = False
 
-# ─── CONFIGURATION SETTINGS ──────────────────────────────────
+# App settings and thresholds
 class Config:
     SLEEP_THRESHOLD    = 5.0
     DROWSY_THRESHOLD   = 2.0
@@ -47,14 +46,16 @@ class Config:
     COLOR_BLACK        = (0, 0, 0)
     
     ALARM_FILE         = "alarm.wav"
-    ALARM_VOLUME       = 0.8
+    ALARM_VOLUME       = 1.0
+    BEEP_FREQUENCY     = 2000
+    BEEP_DURATION      = 500
     
     FONT               = cv2.FONT_HERSHEY_SIMPLEX
     FONT_SCALE_LARGE   = 1.0
     FONT_SCALE_SMALL   = 0.6
     FONT_THICKNESS     = 2
 
-# ─── SOUND MANAGER ───────────────────────────────────────────
+# Handle alarm playback and fallback beep mode
 class SoundManager:
     def __init__(self, alarm_file):
         self.alarm_file = alarm_file
@@ -96,11 +97,17 @@ class SoundManager:
         print("⚠️  No sound system available. Visual only.")
     
     def _beep_loop(self):
-        while not self._beep_thread_stop.wait(1.0):
+        # Keep beeping until the user is detected awake again.
+        while not self._beep_thread_stop.is_set():
             try:
-                winsound.MessageBeep(winsound.MB_ICONHAND)
-            except Exception as e:
-                print(f"⚠️  Could not play fallback beep: {e}")
+                winsound.Beep(Config.BEEP_FREQUENCY, Config.BEEP_DURATION)
+            except RuntimeError:
+                try:
+                    winsound.MessageBeep(winsound.MB_ICONHAND)
+                except Exception as e:
+                    print(f"⚠️  Could not play fallback beep: {e}")
+                    break
+            if self._beep_thread_stop.wait(0.2):
                 break
     
     def play_alarm(self):
@@ -141,7 +148,7 @@ class SoundManager:
         if self.sound_system == "pygame" and PYGAME_AVAILABLE:
             pygame.mixer.quit()
 
-# ─── DETECTOR ────────────────────────────────────────────────
+# Load Haar cascades and detect face/eye states
 class EyeDetector:
     def __init__(self):
         self.script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -157,7 +164,7 @@ class EyeDetector:
         try:
             print(f"ℹ️  Downloading {filename} from OpenCV GitHub...")
             urllib.request.urlretrieve(url, target_path)
-            print(f"✅ Downloaded {filename} to {target_path}")
+            print(f"✅ Saved {filename} to {target_path}")
             return target_path
         except Exception as e:
             print(f"⚠️  Failed to download {filename}: {e}")
@@ -176,7 +183,7 @@ class EyeDetector:
         return None
     
     def _load_cascades(self):
-        """Robustly load Haar Cascade XML files."""
+        # Try system-installed cascade first, then local files, then download if needed.
         face_xml = 'haarcascade_frontalface_default.xml'
         eye_xml = 'haarcascade_eye.xml'
 
@@ -223,7 +230,7 @@ class EyeDetector:
                 self.current_status = "Eyes Closed"
         return self.current_status, self.closure_duration, self.alarm_triggered
 
-# ─── DISPLAY MANAGER ─────────────────────────────────────────
+# Draw the video overlay and track FPS
 class DisplayManager:
     def __init__(self):
         self.frame_count = 0
@@ -256,7 +263,7 @@ class DisplayManager:
             cv2.putText(frame, "!!! WAKE UP !!!", (150, 240), Config.FONT, 1.5, Config.COLOR_RED, 3)
         return frame
 
-# ─── MAIN APPLICATION ─────────────────────────────────────────
+# Main app loop for camera capture, detection, and alerting
 class EyeGuardAI:
     def __init__(self):
         print("Initializing EyeGuard AI...")
