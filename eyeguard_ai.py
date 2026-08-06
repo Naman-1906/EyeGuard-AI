@@ -3,8 +3,10 @@ import time
 import numpy as np
 import sys
 import os
+import shutil
 import threading
 import urllib.request
+from pathlib import Path
 
 # Optional audio support for the alarm.
 try:
@@ -151,7 +153,7 @@ class SoundManager:
 # Load Haar cascades and detect face/eye states
 class EyeDetector:
     def __init__(self):
-        self.script_dir = os.path.dirname(os.path.abspath(__file__))
+        self.script_dir = Path(__file__).resolve().parent
         self._load_cascades()
         self.eyes_closed_start = None
         self.current_status = "Awake"
@@ -160,20 +162,26 @@ class EyeDetector:
     
     def _download_cascade(self, filename):
         url = f"https://raw.githubusercontent.com/opencv/opencv/master/data/haarcascades/{filename}"
-        target_path = os.path.join(self.script_dir, filename)
+        target_path = self.script_dir / filename
         try:
             print(f"ℹ️  Downloading {filename} from OpenCV GitHub...")
-            urllib.request.urlretrieve(url, target_path)
+            with urllib.request.urlopen(url, timeout=20) as response:
+                data = response.read()
+            if not data:
+                raise RuntimeError("download returned no data")
+            with target_path.open("wb") as file_handle:
+                file_handle.write(data)
             print(f"✅ Saved {filename} to {target_path}")
-            return target_path
+            return str(target_path)
         except Exception as e:
             print(f"⚠️  Failed to download {filename}: {e}")
             return None
     
     def _get_cascade_file(self, filename):
-        system_file = os.path.join(cv2.data.haarcascades, filename)
-        local_file = os.path.join(self.script_dir, filename)
-        if os.path.exists(system_file):
+        haarcascades_dir = getattr(cv2.data, "haarcascades", None)
+        system_file = str(Path(haarcascades_dir) / filename) if haarcascades_dir else None
+        local_file = str(self.script_dir / filename)
+        if system_file and os.path.exists(system_file):
             return system_file
         if os.path.exists(local_file):
             return local_file
@@ -191,20 +199,30 @@ class EyeDetector:
         eye_file = self._get_cascade_file(eye_xml)
 
         if not face_file or not eye_file:
-            raise IOError("❌ Could not locate cascade XML files. Ensure OpenCV haarcascade data or local XMLs are available.")
+            print("⚠️ Haar cascade XML files are unavailable; running without face/eye detection.")
+            self.face_cascade = None
+            self.eye_cascade = None
+            return
 
         self.face_cascade = cv2.CascadeClassifier(face_file)
         self.eye_cascade = cv2.CascadeClassifier(eye_file)
 
-        if self.face_cascade.empty() or self.eye_cascade.empty():
-            raise IOError("❌ Could not load cascade classifiers! Ensure XML files are present and valid.")
+        if self.face_cascade is None or self.eye_cascade is None or self.face_cascade.empty() or self.eye_cascade.empty():
+            print("⚠️ Haar cascade classifiers could not be loaded; running without face/eye detection.")
+            self.face_cascade = None
+            self.eye_cascade = None
+            return
 
         print(f"✅ Cascade classifiers loaded successfully from: {face_file}, {eye_file}")
     
     def detect_faces(self, gray):
+        if self.face_cascade is None:
+            return []
         return self.face_cascade.detectMultiScale(gray, Config.FACE_SCALE_FACTOR, Config.FACE_MIN_NEIGHBORS, minSize=Config.FACE_MIN_SIZE)
     
     def detect_eyes(self, face_gray):
+        if self.eye_cascade is None:
+            return []
         height = face_gray.shape[0]
         upper_face = face_gray[0:int(height * 0.6), :]
         return self.eye_cascade.detectMultiScale(upper_face, Config.EYE_SCALE_FACTOR, Config.EYE_MIN_NEIGHBORS, minSize=Config.EYE_MIN_SIZE)
@@ -270,13 +288,31 @@ class EyeGuardAI:
         self.sound_manager = SoundManager(Config.ALARM_FILE)
         self.eye_detector = EyeDetector()
         self.display_manager = DisplayManager()
-        self.camera = cv2.VideoCapture(0)
+        self.camera = None
         self.running = True
+
+        for camera_index in (0, 1, 2):
+            camera = cv2.VideoCapture(camera_index)
+            if camera.isOpened():
+                self.camera = camera
+                print(f"✅ Camera connected on index {camera_index}")
+                break
+            camera.release()
+
+        if self.camera is None:
+            print("⚠️  No camera detected. Starting in headless mode.")
+            self.running = False
         
     def run(self):
         while self.running:
+            if self.camera is None or not self.camera.isOpened():
+                print("⚠️  Camera unavailable. Exiting.")
+                break
+
             ret, frame = self.camera.read()
-            if not ret: continue
+            if not ret:
+                time.sleep(0.1)
+                continue
             frame = cv2.flip(frame, 1)
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             faces = self.eye_detector.detect_faces(gray)
@@ -302,7 +338,8 @@ class EyeGuardAI:
 
     def cleanup(self):
         self.sound_manager.cleanup()
-        self.camera.release()
+        if self.camera is not None and self.camera.isOpened():
+            self.camera.release()
         cv2.destroyAllWindows()
 
 if __name__ == "__main__":
