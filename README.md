@@ -41,18 +41,25 @@ This application can help reduce accidents caused by fatigue and improve user aw
 
 ---
 
-## 📂 Project Structure
+### Project Structure
 
-```
+```text
 EyeGuard-AI/
-│── eyeguard_ai.py          # Main application
-│── haarcascade_frontalface_default.xml
-│── haarcascade_eye.xml
-│── alarm.wav               # Alarm sound
-│── README.md
+├── haarcascades/
+│   ├── haarcascade_eye.xml
+│   └── haarcascade_frontalface_default.xml
+├── eyeguard_ai.py
+└── README.md
 ```
 
----
+### Haar Cascade Files
+
+The `haarcascades` folder contains OpenCV Haar Cascade classifiers:
+
+- `haarcascade_eye.xml` – Used for eye detection.
+- `haarcascade_frontalface_default.xml` – Used for frontal face detection.
+
+These XML files are loaded by the Python application using OpenCV.
 
 ## ⚙️ Installation
 
